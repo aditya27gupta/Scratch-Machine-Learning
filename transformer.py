@@ -33,27 +33,52 @@ class TransformerModel(nn.Transformer):
 
     def init_weights(self) -> None:
         initrange = 0.1
-        nn.init.uniform(self.input_emb.weight, -initrange, initrange)
+        nn.init.uniform_(self.input_emb.weight, -initrange, initrange)
         nn.init.zeros_(self.decoder.bias)
-        nn.init.uniform(self.decoder.weight, -initrange, initrange)
+        nn.init.uniform_(self.decoder.weight, -initrange, initrange)
 
     def forward(self, src: torch.Tensor) -> torch.Tensor:
         src = self.input_emb(src) * torch.sqrt(torch.tensor(self.ninp, dtype=torch.float32))
+        print(src.size())
+        src = src.transpose(0, 1)  # Convert to shape (seq_len, batch, features)
         src = self.pos_encoder(src)
         output = self.encoder(src)
         output = self.decoder(output)
-        return f.log_softmax(output, dim=-1)
+        output = output.transpose(0, 1)  # Convert back to shape (batch, seq_len, features)
+        result = f.log_softmax(output, dim=-1)
+        return result
+
+
+class Trainer(nn.Module):
+    def __init__(self, ntoken: int, ninp: int, nhead: int, nhid: int, nlayers: int, lr: float = 1e-3) -> None:
+        super().__init__()
+        self.model = TransformerModel(ntoken, ninp, nhead, nhid, nlayers)
+        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr)
+        self.criterion = nn.NLLLoss()
+
+    def train(self, src: torch.Tensor, target: torch.Tensor, epochs: int):
+        self.model.train()
+        for _ in range(epochs):
+            self.optimizer.zero_grad()
+            output = self.model(src)
+            print(output.size())
+            return None
+            loss = self.criterion(output.view(-1, output.size(-1)), target.view(-1))
+            loss.backward()
+            self.optimizer.step()
+            print(f"Loss: {loss.item()}")
+        return self.model
 
 
 class Tokenizer:
     def __init__(self) -> None:
-        self.word2idx = {"<sos>": 0, "<eos>": 1}
-        self.word_count = 2
+        self.word2idx = {"<pad>": 0, "<sos>": 1, "<eos>": 2}  # Added <pad> token
+        self.word_count = 3  # Updated initial count
 
     def add_word(self, word: str) -> None:
         if word not in self.word2idx:
+            self.word2idx[word] = self.word_count
             self.word_count += 1
-            self.word2idx[word] = self.word_count - 1
 
     def tokenize(self, path: Path, length: int = 2) -> tuple[torch.Tensor, torch.Tensor]:
         if not path.exists():
@@ -62,15 +87,18 @@ class Tokenizer:
 
         with path.open(encoding="utf-8") as f:
             for line in f:
-                words = ["<sos>", *line.split(), "<eos>"]
+                words = line.split()
                 for word in words:
                     self.add_word(word.lower())
         inputs = []
         output = []
+        cut_off = 20
         with path.open(encoding="utf-8") as f:
             for line in f:
                 words = [*line.split(), "<eos>"]
-                prev_idx = 0
+                if len(words) < cut_off:
+                    continue
+                prev_idx = self.word2idx["<sos>"]  # Start with <sos> token
                 cur_in = []
                 cur_out = []
                 for word in words:
@@ -79,7 +107,7 @@ class Tokenizer:
                         cur_in = cur_in[1:]
                     cur_in += [prev_idx]
                     if len(cur_in) < length:
-                        cur_in = [self.word_count + 100] * (length - len(cur_in)) + cur_in
+                        cur_in = [self.word2idx["<pad>"]] * (length - len(cur_in)) + cur_in  # Use <pad> token
                     cur_out = [token]
                     prev_idx = token
                     inputs.append(cur_in)
@@ -94,8 +122,10 @@ def main() -> None:
     file_path = "./docs/moby_dick.txt"
     path = Path(file_path)
     tokenizer = Tokenizer()
-    results = tokenizer.tokenize(path=path)
-    print(results)
+    x, y = tokenizer.tokenize(path=path)
+    print(x.size(), y.size())
+    trainer = Trainer(ntoken=tokenizer.word_count, ninp=x.size(1), nhead=1, nhid=200, nlayers=2)
+    trainer.train(src=x, target=y, epochs=1)
 
 
 if __name__ == "__main__":
