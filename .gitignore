@@ -1,6 +1,6 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
-
+__marimo__/
 # UV
 uv.lock
 
